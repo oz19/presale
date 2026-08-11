@@ -5,6 +5,7 @@ pragma solidity 0.8.34;
 import "lib/openzeppelin-contracts/contracts/access/Ownable.sol";
 import "lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
 import "lib/openzeppelin-contracts/contracts/token/ERC20/utils/SafeERC20.sol";
+import "src/interfaces/IAggregator.sol";
 
 
 contract PresaleApp is Ownable {
@@ -20,6 +21,7 @@ contract PresaleApp is Ownable {
     uint256 public endTime;
     uint256[][3] public phases;
     uint256 public currentPhase;
+    uint256 public dataFeedAddress;
     mapping(address => bool) public isBanned;
     mapping(address => bool) public allowedPayingTokens;
     mapping(address => uint256) public balances;
@@ -38,6 +40,7 @@ contract PresaleApp is Ownable {
         uint256 maxSupply_,
         uint256 startTime_,
         uint256 endTime_,
+        uint256 dataFeedAddress_,
         uint256[][3] memory phases_
     ) Ownable(msg.sender) {
         internalWallet = internalWallet_;
@@ -47,6 +50,7 @@ contract PresaleApp is Ownable {
         startTime = startTime_;
         endTime = endTime_;
         phases = phases_;
+        dataFeedAddress = dataFeedAddress_;
 
         require(endTime > startTime, "Start time should be before End time");
 
@@ -82,7 +86,39 @@ contract PresaleApp is Ownable {
 
         IERC20(tokenUsedToBuy_).safeTransferFrom(msg.sender, internalWallet, amount_);
 
-        emit BuyToken(msg.sender, amount_);
+        emit BuyToken(msg.sender, tokenAmountToReceive);
+    }
+
+    /**
+    * Used to buy tokens with Stablecoins.
+    * @param amount_ amount in dollars (USDC, USDT...) used to buy our token
+    */
+    function buyWithEther() banCheck payable external {
+        require(block.timestamp >= startTime && block.timestamp <= endTime, "Out of presale period");
+
+        uint256 ethUsdPrice = getEthUsdPriceWith18Decimals();  // From data feed (oracle)
+        uint256 tokenAmountToReceive = calculateTokenAmountToReceiveFromEther(
+            ethUsdPrice,
+            msg.value  // Ether with 18 decimals
+        );
+        currentPhaseCheck(tokenAmountToReceive);
+
+        totalSold += tokenAmountToReceive;
+        require(totalSold <= maxSupply, "Max supply exceeded");
+
+        balances[msg.sender] += tokenAmountToReceive;
+
+        (bool success,) = internalWallet.call{value: msg.value}("");
+        require(success, "Transfer failed");
+
+        emit BuyToken(msg.sender, tokenAmountToReceive);
+    }
+
+    function getEtherPriceWith18Decimals() internal returns(uint256) {
+        // Returns a price with 8 decimals
+        (, int256 answer,,,) = IAggregator(dataFeedAddress).latestRoundData();
+        uint256 price = uint256(answer * (10**10));  // Ether price represented with 18 decimals (8+10)
+        return price
     }
 
     function emergencyTokenWithdraw(address token_, uint256 amount_) onlyOwner external {
@@ -115,6 +151,14 @@ contract PresaleApp is Ownable {
         // resultDec = amountDec - priceDec + adjustmentDec --> We can get adjustmentDec
         uint256 adjustmentDecimals = resultDecimals + priceDecimals - amountDecimals;
         return (amount * 10**adjustmentDecimals) / price;
+    }
+
+    function calculateTokenAmountToReceiveFromEther(uint256 etherPriceInUsd_, uint256 amount_) internal returns(uint256) {
+        uint256 decimalAdjustment = 10**18;  // amount_ has 18 decimals
+        uint256 usdAmount = etherPriceInUsd_ * amount_ / decimalAdjustment;  // usdAmount has 18 decimals
+        uint256 tokenPrice = phases[currentPhase][1];  // tokenPrice has 6 decimals
+        uint256 decimalAdjustment = 10**6;  // Compensates the 6 decimals in tokenPrice
+        return (usdAmount * decimalAdjustment) / tokenPrice;
     }
 
     function currentPhaseCheck(uint256 amount_) internal returns(uint256) {
