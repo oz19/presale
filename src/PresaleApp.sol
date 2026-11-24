@@ -13,8 +13,8 @@ contract PresaleApp is Ownable {
 
     using SafeERC20 for IERC20;
 
-    address public saleTokenAddress;  // Address of the token that is been sold
-    address public internalWallet;  // Funds will be stored here
+    address public saleTokenAddress;
+    address public internalWallet;
     address public usdtAddress;
     address public usdcAddress;
     address public dataFeedAddress;
@@ -58,14 +58,9 @@ contract PresaleApp is Ownable {
 
         require(endTime > startTime, "Start time should be before End time");
 
-        // Allowed tokens used to buy
         allowedPayingTokens[usdtAddress] = true;
         allowedPayingTokens[usdcAddress] = true;
 
-        // Provide all tokens to the contract.
-        // Tokens must be created and minted.
-        // An approve will be required for this operation on the token side 
-        // during the deployment of this smart contract.
         IERC20(saleTokenAddress).safeTransferFrom(msg.sender, address(this), maxSupply);
     }
 
@@ -77,14 +72,10 @@ contract PresaleApp is Ownable {
         delete isBanned[user_];
     }
 
-    /**
-    * Used to buy tokens with Stablecoins.
-    * @param tokenUsedToBuy_ the address of the token used to buy (must be an allowed token)
-    * @param amount_ amount in dollars (USDC, USDT...) used to buy our token
-    */
     function buyWithStable(address tokenUsedToBuy_, uint256 amount_) external banCheck {
         require(block.timestamp >= startTime && block.timestamp <= endTime, "Out of presale period");
         require(allowedPayingTokens[tokenUsedToBuy_], "Paying token not allowed");
+        require(currentPhase < 3, "All phases completed");
 
         uint256 tokenAmountToReceive = calculateTokenAmountToReceive(tokenUsedToBuy_, amount_);
         currentPhaseCheck(tokenAmountToReceive);
@@ -99,16 +90,14 @@ contract PresaleApp is Ownable {
         emit BuyToken(msg.sender, tokenAmountToReceive);
     }
 
-    /**
-    * Used to buy tokens with Stablecoins.
-    */
     function buyWithEther() external payable banCheck {
         require(block.timestamp >= startTime && block.timestamp <= endTime, "Out of presale period");
+        require(currentPhase < 3, "All phases completed");
 
-        uint256 ethUsdPrice = getEthUsdPriceWith18Decimals();  // From data feed (oracle)
+        uint256 ethUsdPrice = getEthUsdPriceWith18Decimals();
         uint256 tokenAmountToReceive = calculateTokenAmountToReceiveFromEther(
             ethUsdPrice,
-            msg.value  // Ether with 18 decimals
+            msg.value
         );
         currentPhaseCheck(tokenAmountToReceive);
 
@@ -124,9 +113,9 @@ contract PresaleApp is Ownable {
     }
 
     function getEthUsdPriceWith18Decimals() internal view returns(uint256) {
-        // Returns a price with 8 decimals
         (, int256 answer,,,) = IAggregator(dataFeedAddress).latestRoundData();
-        uint256 price = uint256(answer * (10**10));  // Ether price represented with 18 decimals (8+10)
+        require(answer > 0, "Invalid oracle price");
+        uint256 price = uint256(answer * (10**10));
         return price;
     }
 
@@ -152,38 +141,27 @@ contract PresaleApp is Ownable {
 
     // Internal functions
 
-    /**
-    * Internal function to calculate the number of tokens to return for a given amount (in USDT or 
-    * a similar token representing USD). It also adjusts the number of decimals required to return 
-    * a value that can be represented with exactly 18 decimals.
-    * @param tokenUsedToBuy_ the address of the token used to buy (must be an allowed token)
-    * @param amount_ amount in dollars (USDC, USDT...) used to buy our token
-    */
     function calculateTokenAmountToReceive(
         address tokenUsedToBuy_,
         uint256 amount_
     ) internal view returns(uint256) {
-        uint256 price = phases[currentPhase][1];  // Price in USDT format (6 decimals)
+        uint256 price = phases[currentPhase][1];
         uint256 resultDecimals = 18;
         uint256 priceDecimals = 6;
         uint256 amountDecimals = IERC20Metadata(tokenUsedToBuy_).decimals();
-        // resultDec = amountDec - priceDec + adjustmentDec --> We can get adjustmentDec
         uint256 adjustmentDecimals = resultDecimals + priceDecimals - amountDecimals;
         return (amount_ * 10**adjustmentDecimals) / price;
     }
 
     function calculateTokenAmountToReceiveFromEther(uint256 etherPriceInUsd_, uint256 amount_) internal view returns(uint256) {
-        uint256 decimalAdjustment = 10**18;  // amount_ has 18 decimals
-        uint256 usdAmount = etherPriceInUsd_ * amount_ / decimalAdjustment;  // usdAmount has 18 decimals
-        uint256 tokenPrice = phases[currentPhase][1];  // tokenPrice has 6 decimals
-        decimalAdjustment = 10**6;  // Compensates the 6 decimals in tokenPrice
+        uint256 decimalAdjustment = 10**18;
+        uint256 usdAmount = etherPriceInUsd_ * amount_ / decimalAdjustment;
+        uint256 tokenPrice = phases[currentPhase][1];
+        decimalAdjustment = 10**6;
         return (usdAmount * decimalAdjustment) / tokenPrice;
     }
 
     function currentPhaseCheck(uint256 amount_) internal returns(uint256) {
-        if (currentPhase >= 3) {
-            return currentPhase;
-        }
         if (isAmountLimitExceeded(amount_) || isTimeLimitExceeded()) {
             currentPhase++;
         }
